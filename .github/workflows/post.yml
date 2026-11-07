@@ -71,3 +71,11 @@ jobs:
           YV_BIBLE_IDS: "3034"
           CAPTION_LANG: "Kreol Morisien (Mauritian Creole)"
           REPEAT_DAYS: "90"
+      - name: Upload generated image
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: generated-verse-image
+          path: images/dryrun-*.jpg
+          if-no-files-found: ignore
+          retention-days: 7
