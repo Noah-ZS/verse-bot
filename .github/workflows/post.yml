@@ -11,7 +11,7 @@ on:
     inputs:
       dry_run:
         description: "Dry run (generate only, no push/publish)"
-        type: boolean
+        type: boolean 
         default: false
       force:
         description: "Bypass min-gap / max-per-day guard"
