@@ -1,0 +1,27 @@
+name: refresh-ig-token
+
+on:
+  schedule:
+    - cron: "0 3 1 * *"     # 1st of every month
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Refresh long-lived Instagram token and update secret
+        env:
+          IG_TOKEN: ${{ secrets.IG_TOKEN }}
+          GH_TOKEN: ${{ secrets.GH_PAT }}   # fine-grained PAT: this repo, "Secrets: read and write"
+        run: |
+          set -euo pipefail
+          resp=$(curl -fsS "https://graph.instagram.com/refresh_access_token?grant_type=ig_refresh_token&access_token=${IG_TOKEN}")
+          new=$(echo "$resp" | jq -r '.access_token')
+          exp=$(echo "$resp" | jq -r '.expires_in')
+          [ -n "$new" ] && [ "$new" != "null" ] || { echo "Refresh failed"; exit 1; }
+          echo "::add-mask::$new"
+          gh secret set IG_TOKEN --repo "$GITHUB_REPOSITORY" --body "$new"
+          echo "Token refreshed, valid for ${exp}s"
