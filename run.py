@@ -12,12 +12,12 @@ Helper modes (need only YVP_APP_KEY):
 Secrets / env:
   YVP_APP_KEY, GEMINI_API_KEY, CF_ACCOUNT_ID, CF_API_TOKEN, IG_USER_ID, IG_TOKEN
 Optional env:
-  YV_BIBLE_IDS=3034            comma-separated Bible ids, tried in order (verify with --list-bibles)
+  YV_BIBLE_IDS=344            comma-separated Bible ids, tried in order (verify with --list-bibles)
   CAPTION_LANG="Kreol Morisien (Mauritian Creole)"   EXTRA_HASHTAGS="#kreolmorisien #ilemaurice ..."
   REPEAT_DAYS=90              a verse is eligible again this many days after it was posted
   MAX_VERSE_CHARS=420         longer verses are skipped (status=toolong)
   DRY_RUN=1  FORCE=1  MAX_POSTS_PER_DAY=3  MIN_GAP_MINUTES=120  POST_TZ_OFFSET_HOURS=0
-  GEMINI_MODEL  CF_STEPS  IG_API_BASE  IG_API_VERSION  IG_HANDLE  FONT_PATH
+  GEMINI_MODELS=a,b,c  ALLOW_FALLBACK_CONTENT=0  CF_STEPS  IG_API_BASE  IG_API_VERSION  IG_HANDLE  FONT_PATH
 """
 from __future__ import annotations
 
@@ -61,7 +61,10 @@ YV_LANG = os.environ.get("YV_LANG", "mfe")  # ISO 639-3 for Kreol Morisien
 CAPTION_LANG = os.environ.get("CAPTION_LANG", "Kreol Morisien (Mauritian Creole)")
 EXTRA_TAGS = os.environ.get("EXTRA_HASHTAGS", "#kreolmorisien #ilemaurice #morisien")
 
-GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-flash-latest")
+GEMINI_MODELS = [m.strip() for m in os.environ.get(
+    "GEMINI_MODELS", os.environ.get("GEMINI_MODEL", "gemini-3.5-flash-lite,gemini-3.1-flash-lite,gemini-flash-lite-latest")
+).split(",") if m.strip()]
+ALLOW_FALLBACK = os.environ.get("ALLOW_FALLBACK_CONTENT", "0") == "1"
 CF_MODEL = "@cf/black-forest-labs/flux-1-schnell"
 CF_STEPS = int(os.environ.get("CF_STEPS", "4"))
 IG_BASE = os.environ.get("IG_API_BASE", "https://graph.instagram.com").rstrip("/")
@@ -164,7 +167,13 @@ def yv_get(path: str, params: dict | None = None) -> dict | list:
             continue
         if not r.ok:  # 401/403 etc: bad key or no permission, never "mark unavailable"
             raise RuntimeError(f"YouVersion {r.status_code} for {path}: {r.text[:300]}")
-        return r.json()
+        if not r.content.strip():
+            return {}  # e.g. 204 / empty body = nothing to return
+        try:
+            return r.json()
+        except ValueError:
+            raise RuntimeError(f"non-JSON response from {path} (HTTP {r.status_code}, "
+                               f"{r.headers.get('Content-Type')}): {r.text[:300]!r}") from None
     raise RuntimeError(f"YouVersion request failed: {last}")
 
 
@@ -319,13 +328,39 @@ def pick_and_fetch(rows: list[dict], metas: dict[str, dict]) -> tuple[dict, str,
 
 # ------------------------------------------------------------------ helper CLI modes
 def cmd_list_bibles() -> int:
-    bibles = yv_list_bibles()
-    if not bibles:
-        log(f"No Bibles returned for language '{YV_LANG}'. Your App Key may not have access to any.")
-        return 1
-    for b in bibles:
-        log(f"id={b.get('id')}  abbr={b.get('abbreviation')}  title={b.get('localized_title') or b.get('title')}"
-            f"  lang={b.get('language_tag')}\n    copyright: {(b.get('copyright') or '')[:160]}")
+    """Diagnose Bible access: try several list queries, then probe each configured id."""
+    KM = re.compile(r"kreol|creole|morisien|mauritian|mfe", re.I)
+    variants = [
+        (f"language={YV_LANG}, all_available", {"language_ranges[]": YV_LANG, "all_available": "true"}),
+        (f"language={YV_LANG}, enabled only", {"language_ranges[]": YV_LANG}),
+        ("language=*, all_available", {"language_ranges[]": "*", "all_available": "true"}),
+        ("no filter", {}),
+    ]
+    found_any = False
+    for label, params in variants:
+        try:
+            j = yv_get("/bibles", params)
+        except Exception as e:  # noqa: BLE001
+            log(f"[{label}] FAILED: {str(e)[:300]}")
+            continue
+        bibles = j if isinstance(j, list) else (j.get("data") or j.get("bibles") or j.get("items") or [])
+        keys = list(j.keys()) if isinstance(j, dict) else "list"
+        log(f"[{label}] {len(bibles)} Bible(s); response keys: {keys}")
+        if not bibles:
+            log(f"  raw (truncated): {json.dumps(j)[:300]}")
+        shown = [b for b in bibles if KM.search(json.dumps(b))] or bibles[:5]
+        for b in shown:
+            found_any = found_any or bool(KM.search(json.dumps(b)))
+            log(f"  id={b.get('id')}  abbr={b.get('abbreviation')}  title={b.get('localized_title') or b.get('title')}"
+                f"  lang={b.get('language_tag')}\n    copyright: {(b.get('copyright') or '')[:160]}")
+    for bid in YV_BIBLE_IDS:
+        for path in (f"/bibles/{bid}", f"/bibles/{bid}/passages/JHN.3.16"):
+            try:
+                j = yv_get(path, {"format": "text"} if "passages" in path else None)
+                log(f"probe {path}: OK -> {json.dumps(j)[:200]}")
+            except Exception as e:  # noqa: BLE001
+                log(f"probe {path}: FAILED -> {str(e)[:200]}")
+    log("\nKreol Morisien Bible visible to this key: " + ("YES (see above)" if found_any else "not found"))
     return 0
 
 
@@ -360,6 +395,31 @@ def cmd_check(apply: bool) -> int:
     return 0
 
 
+def cmd_check_gemini() -> int:
+    key = os.environ["GEMINI_API_KEY"]
+    hdr = {"x-goog-api-key": key}
+    try:
+        r = requests.get("https://generativelanguage.googleapis.com/v1beta/models", headers=hdr,
+                         params={"pageSize": 200}, timeout=30)
+        models = r.json().get("models", [])
+        names = [m["name"].split("/")[-1] for m in models if "generateContent" in m.get("supportedGenerationMethods", [])]
+        flash = [n for n in names if "flash" in n]
+        log(f"HTTP {r.status_code}. Models with generateContent matching 'flash': {', '.join(flash) or '(none)'}")
+    except Exception as e:  # noqa: BLE001
+        log(f"model list failed: {e}")
+    for model in GEMINI_MODELS:
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+        t0 = time.time()
+        try:
+            r = requests.post(url, headers=hdr, timeout=40, json={
+                "contents": [{"parts": [{"text": 'Reply with JSON {"ok": true}'}]}],
+                "generationConfig": {"responseMimeType": "application/json"}})
+            log(f"{model}: HTTP {r.status_code} in {time.time() - t0:.1f}s -> {r.text[:160]!r}")
+        except requests.RequestException as e:
+            log(f"{model}: FAILED after {time.time() - t0:.0f}s: {e}")
+    return 0
+
+
 # --------------------------------------------------------------------- LLM content
 def _validate(d: dict) -> dict:
     ip = str(d["image_prompt"]).strip()
@@ -375,20 +435,22 @@ def _validate(d: dict) -> dict:
     return {"image_prompt": ip, "caption": cap, "hashtags": tags, "alt_text": alt[:900]}
 
 
-def gemini_content(row: dict, verse: dict, style: str) -> dict:
+def gemini_content(row: dict, verse: dict, style: str, model: str) -> dict:
     prompt = (
         USER_PROMPT.replace("<<label>>", row["label"])
         .replace("<<theme>>", row["theme"] or "encouragement")
         .replace("<<style>>", style)
         .replace("<<lang>>", CAPTION_LANG)
     )
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent"
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
     body = {
         "systemInstruction": {"parts": [{"text": SYSTEM_PROMPT}]},
         "contents": [{"role": "user", "parts": [{"text": prompt}]}],
-        "generationConfig": {"responseMimeType": "application/json", "temperature": 0.9},
+        # No temperature/top_p/top_k: newer Gemini models deprecate them and may error.
+        "generationConfig": {"responseMimeType": "application/json"},
     }
-    r = http("POST", url, headers={"x-goog-api-key": os.environ["GEMINI_API_KEY"]}, json=body, timeout=90)
+    r = http("POST", url, headers={"x-goog-api-key": os.environ["GEMINI_API_KEY"]}, json=body,
+             timeout=40, retries=2)
     text = r.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
     text = re.sub(r"^```(?:json)?\s*|\s*```$", "", text)
     return _validate(json.loads(text))
@@ -404,14 +466,18 @@ def fallback_content(verse: dict, style: str) -> dict:
 
 
 def get_content(row: dict, verse: dict, style: str) -> dict:
-    for attempt in (1, 2):
+    for model in GEMINI_MODELS:
         try:
-            return gemini_content(row, verse, style)
+            c = gemini_content(row, verse, style, model)
+            log(f"Gemini content from {model}")
+            return c
         except Exception as e:  # noqa: BLE001
-            log(f"Gemini attempt {attempt} failed: {e}")
-            time.sleep(5)
-    log("Using fallback content")
-    return fallback_content(verse, style)
+            log(f"Gemini {model} failed: {str(e)[:250]}")
+    if ALLOW_FALLBACK:
+        log("Using generic fallback content (ALLOW_FALLBACK_CONTENT=1)")
+        return fallback_content(verse, style)
+    sys.exit("All Gemini models failed, so nothing was posted (a generic post would be low quality). "
+             "Run `python run.py --check-gemini`, or set ALLOW_FALLBACK_CONTENT=1 to post anyway.")
 
 
 def build_caption(c: dict, meta: dict, reference: str) -> str:
@@ -559,16 +625,35 @@ def commit_push(paths: list[str], msg: str) -> None:
     raise RuntimeError(f"git push failed: {last.stderr[:300]}")
 
 
+def check_repo_public() -> None:
+    """Instagram must fetch the image from raw.githubusercontent.com, which only works for PUBLIC repos."""
+    repo = os.environ["GITHUB_REPOSITORY"]
+    hdr = {"Accept": "application/vnd.github+json"}
+    if os.environ.get("GITHUB_TOKEN"):
+        hdr["Authorization"] = f"Bearer {os.environ['GITHUB_TOKEN']}"
+    try:
+        r = requests.get(f"https://api.github.com/repos/{repo}", headers=hdr, timeout=20)
+    except requests.RequestException:
+        return
+    if r.status_code == 404 or (r.status_code == 200 and r.json().get("private")):
+        sys.exit(f"Repo {repo} is private. Instagram cannot fetch images from a private repo's raw URLs. "
+                 f"Make the repo public (Settings > Danger zone > Change visibility) or host images elsewhere.")
+
+
 def wait_for_url(url: str, timeout: int = 120) -> None:
     end = time.time() + timeout
+    last = "no response"
     while time.time() < end:
         try:
-            if requests.get(url, timeout=20, stream=True).status_code == 200:
+            r = requests.get(url, timeout=20, stream=True)
+            if r.status_code == 200:
                 return
-        except requests.RequestException:
-            pass
+            last = f"HTTP {r.status_code}"
+        except requests.RequestException as e:
+            last = str(e)[:100]
         time.sleep(5)
-    raise RuntimeError(f"image URL never became reachable: {url}")
+    raise RuntimeError(f"image URL never became reachable ({last}): {url}. "
+                       f"404 usually means the repo is private, the branch name in the URL is wrong, or the push did not land.")
 
 
 # ------------------------------------------------------------------------ Instagram
@@ -596,6 +681,10 @@ def publish_instagram(image_url: str, caption: str, alt: str) -> str:
 
 # ----------------------------------------------------------------------------- main
 def main(argv: list[str]) -> int:
+    if "--check-gemini" in argv:
+        if not os.environ.get("GEMINI_API_KEY"):
+            sys.exit("Set GEMINI_API_KEY first")
+        return cmd_check_gemini()
     if "--list-bibles" in argv or "--check" in argv:
         if not os.environ.get("YVP_APP_KEY"):
             sys.exit("Set YVP_APP_KEY first")
@@ -611,6 +700,9 @@ def main(argv: list[str]) -> int:
     if reason:
         log(f"Skipping: {reason}")
         return 0
+
+    if not DRY_RUN:
+        check_repo_public()
 
     metas = {}
     for bid in YV_BIBLE_IDS:
