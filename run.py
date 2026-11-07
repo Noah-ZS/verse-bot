@@ -12,7 +12,7 @@ Helper modes (need only YVP_APP_KEY):
 Secrets / env:
   YVP_APP_KEY, GEMINI_API_KEY, CF_ACCOUNT_ID, CF_API_TOKEN, IG_USER_ID, IG_TOKEN
 Optional env:
-  YV_BIBLE_IDS=3034            comma-separated Bible ids, tried in order (verify with --list-bibles)
+  YV_BIBLE_IDS=344            comma-separated Bible ids, tried in order (verify with --list-bibles)
   CAPTION_LANG="Kreol Morisien (Mauritian Creole)"   EXTRA_HASHTAGS="#kreolmorisien #ilemaurice ..."
   REPEAT_DAYS=90              a verse is eligible again this many days after it was posted
   MAX_VERSE_CHARS=420         longer verses are skipped (status=toolong)
@@ -55,7 +55,7 @@ MAX_VERSE_CHARS = int(os.environ.get("MAX_VERSE_CHARS", "420"))
 MAX_NEW_UNAVAILABLE = int(os.environ.get("MAX_NEW_UNAVAILABLE", "15"))
 
 YV_BASE = os.environ.get("YV_API_BASE", "https://api.youversion.com/v1").rstrip("/")
-YV_BIBLE_IDS = [x.strip() for x in os.environ.get("YV_BIBLE_IDS", "3034").split(",") if x.strip()]
+YV_BIBLE_IDS = [x.strip() for x in os.environ.get("YV_BIBLE_IDS", "344").split(",") if x.strip()]
 YV_LANG = os.environ.get("YV_LANG", "mfe")  # ISO 639-3 for Kreol Morisien
 
 CAPTION_LANG = os.environ.get("CAPTION_LANG", "Kreol Morisien (Mauritian Creole)")
@@ -662,9 +662,19 @@ def ig_url(path: str) -> str:
     return f"{IG_BASE}{ver}/{path.lstrip('/')}"
 
 
+def ig_token() -> str:
+    """Secret as stored may carry a trailing newline, quotes or a 'Bearer ' prefix: clean it."""
+    t = os.environ.get("IG_TOKEN", "").strip().strip("\"'").strip()
+    return t[7:].strip() if t.lower().startswith("bearer ") else t
+
+
+def ig_uid() -> str:
+    return os.environ.get("IG_USER_ID", "").strip().strip("\"'").strip()
+
+
 def publish_instagram(image_url: str, caption: str, alt: str) -> str:
-    uid = os.environ["IG_USER_ID"]
-    hdr = {"Authorization": f"Bearer {os.environ['IG_TOKEN']}"}
+    uid = ig_uid()
+    hdr = {"Authorization": f"Bearer {ig_token()}"}
     data = {"image_url": image_url, "caption": caption}
     if alt:
         data["alt_text"] = alt
@@ -679,8 +689,46 @@ def publish_instagram(image_url: str, caption: str, alt: str) -> str:
     return http("POST", ig_url(f"{uid}/media_publish"), headers=hdr, data={"creation_id": cid}).json()["id"]
 
 
+def cmd_check_instagram() -> int:
+    """Validate IG_TOKEN / IG_USER_ID without posting anything. Never prints the token."""
+    raw = os.environ.get("IG_TOKEN", "")
+    tok = ig_token()
+    issues = []
+    if raw != raw.strip():
+        issues.append("secret has leading/trailing whitespace or a newline (now stripped automatically)")
+    if raw.strip().startswith(("\"", "'")):
+        issues.append("secret is wrapped in quotes (now stripped automatically)")
+    if " " in tok or "\n" in tok:
+        issues.append("token contains spaces/newlines in the middle: it was pasted wrongly")
+    log(f"token length={len(tok)}  starts with '{tok[:4]}'  (Instagram Login tokens usually start 'IG', "
+        f"Facebook Login tokens start 'EAA')")
+    for i in issues:
+        log(f"  ! {i}")
+    if tok.startswith("EAA") and "graph.instagram.com" in IG_BASE:
+        log("  ! This looks like a FACEBOOK token but IG_API_BASE is graph.instagram.com. "
+            "Set IG_API_BASE=https://graph.facebook.com, or generate an Instagram Login token instead.")
+    if len(tok) < 100:
+        log("  ! Token is very short. A real access token is usually 150+ characters. "
+            "App IDs, App Secrets and short-lived codes will not work.")
+    hdr = {"Authorization": f"Bearer {tok}"}
+    for path, params in (("me", {"fields": "user_id,username,account_type"}),
+                         (f"{ig_uid()}", {"fields": "username,account_type"})):
+        if not path:
+            log("IG_USER_ID is empty")
+            continue
+        try:
+            r = requests.get(ig_url(path), headers=hdr, params=params, timeout=30)
+            log(f"GET {path}: HTTP {r.status_code} -> {r.text[:300]}")
+        except requests.RequestException as e:
+            log(f"GET {path}: FAILED {e}")
+    log("IG_USER_ID must equal the 'user_id' (or 'id') returned by /me for the SAME token.")
+    return 0
+
+
 # ----------------------------------------------------------------------------- main
 def main(argv: list[str]) -> int:
+    if "--check-instagram" in argv:
+        return cmd_check_instagram()
     if "--check-gemini" in argv:
         if not os.environ.get("GEMINI_API_KEY"):
             sys.exit("Set GEMINI_API_KEY first")
