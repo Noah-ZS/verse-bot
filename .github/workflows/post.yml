@@ -18,14 +18,14 @@ on:
         type: boolean
         default: false
       args:
-        description: "Optional helper mode: --list-bibles  or  --check  (leave empty for a normal run)"
+        description: "Optional helper mode: --list-bibles, --check, --check-gemini or --check-instagram (leave empty for a normal run)"
         type: string
         default: ""
 
 permissions:
   contents: write
 
-# One run at a time so two triggers can never race on verses.csv or double-post.
+# One run at a time so two triggers can never race on popular_verses.csv or double-post.
 concurrency:
   group: post-verse
   cancel-in-progress: false
@@ -52,34 +52,42 @@ jobs:
           git config user.email "verse-bot@users.noreply.github.com"
 
       - name: Post verse
-        run: python run.py
+        run: python run.py ${{ inputs.args }}
         env:
+          # ---- secrets (Settings > Secrets and variables > Actions) ----
           YVP_APP_KEY: ${{ secrets.YVP_APP_KEY }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           CF_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
           CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
           IG_USER_ID: ${{ secrets.IG_USER_ID }}
           IG_TOKEN: ${{ secrets.IG_TOKEN }}
+          GITHUB_TOKEN: ${{ github.token }}
+
+          # ---- run mode (set by the "Run workflow" form; schedule runs use the defaults) ----
           DRY_RUN: ${{ inputs.dry_run && '1' || '0' }}
           FORCE: ${{ inputs.force && '1' || '0' }}
-          # Set to your UTC offset so "max posts per day" uses your local day (e.g. 4 for UTC+4).
+
+          # ---- posting guard ----
+          # Your offset from UTC in hours (e.g. 4 for UTC+4) so "max posts per day" follows your local day.
           POST_TZ_OFFSET_HOURS: "0"
           MAX_POSTS_PER_DAY: "3"
           MIN_GAP_MINUTES: "120"
-          IG_HANDLE: ""
-          # Bible ids to try in order (confirm with: python run.py --list-bibles)
-          YV_BIBLE_IDS: "3034"
-          CAPTION_LANG: "Kreol Morisien (Mauritian Creole)"
           REPEAT_DAYS: "90"
+
+          # ---- Bible / captions ----
+          YV_BIBLE_IDS: "3034"
+          CAPTION_LANG: "English"
+          IG_HANDLE: ""
+
+          # ---- Instagram (Meta Unified Login) ----
           IG_API_BASE: "https://graph.facebook.com"
           IG_API_VERSION: "v27.0"
-          YV_BIBLE_IDS: "3034"
-          CAPTION_LANG: "English"a
-      - name: Upload generated image
-        if: always()
+
+      # Keeps dry-run images so you can look at them (nothing is published in a dry run).
+      - name: Upload dry-run images
+        if: ${{ always() }}
         uses: actions/upload-artifact@v4
         with:
-          name: generated-verse-image
+          name: dryrun-images
           path: images/dryrun-*.jpg
           if-no-files-found: ignore
-          retention-days: 7
