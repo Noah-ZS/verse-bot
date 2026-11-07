@@ -86,9 +86,10 @@ SYSTEM_PROMPT = (
     "matching the schema. No markdown fences."
 )
 
-USER_PROMPT = """Verse reference: <<reference>> (English label: <<label>>)
-Verse text in the Bible translation (shown on the image, do not alter, translate or re-quote it): "<<text>>"
+USER_PROMPT = """Well-known Bible verse (English label): <<label>>
 Theme: <<theme>>
+You are deliberately NOT given the verse text. Do not quote, translate or paraphrase the verse; the exact
+text is added to the image separately. Reflect only on its well-known theme.
 Visual style for today: <<style>>
 Caption language: <<lang>>
 
@@ -100,8 +101,8 @@ Produce:
    40-60 words. Mood should reflect the verse's theme.
 2. "caption": 40-90 words in the caption language, with short, simple sentences. Open with a
    one-line hook (not the verse itself), then a brief, genuine reflection, then a gentle call to
-   action (e.g. invite people to share it with someone who needs it today). Put the reference
-   on its own line. At most 2 emojis.
+   action (e.g. invite people to share it with someone who needs it today). Do NOT include the
+   verse reference or any scripture quotation in the caption. At most 2 emojis.
 3. "hashtags": 6-10 relevant faith-based hashtags, lowercase, no spaces within a tag.
 4. "alt_text": one sentence in English describing the image for accessibility.
 
@@ -376,9 +377,7 @@ def _validate(d: dict) -> dict:
 
 def gemini_content(row: dict, verse: dict, style: str) -> dict:
     prompt = (
-        USER_PROMPT.replace("<<reference>>", verse["reference"])
-        .replace("<<label>>", row["label"])
-        .replace("<<text>>", verse["text"])
+        USER_PROMPT.replace("<<label>>", row["label"])
         .replace("<<theme>>", row["theme"] or "encouragement")
         .replace("<<style>>", style)
         .replace("<<lang>>", CAPTION_LANG)
@@ -398,7 +397,7 @@ def gemini_content(row: dict, verse: dict, style: str) -> dict:
 def fallback_content(verse: dict, style: str) -> dict:
     return {
         "image_prompt": f"serene {style}, soft cinematic light, calm negative space in the center, muted palette",
-        "caption": verse["reference"],
+        "caption": "",
         "hashtags": ["#bible", "#faith", "#verseoftheday"],
         "alt_text": "A calm, softly lit landscape with a Bible verse written over it.",
     }
@@ -415,11 +414,11 @@ def get_content(row: dict, verse: dict, style: str) -> dict:
     return fallback_content(verse, style)
 
 
-def build_caption(c: dict, meta: dict) -> str:
+def build_caption(c: dict, meta: dict, reference: str) -> str:
     attribution = " | ".join(x for x in (meta["title"] or meta["abbr"], meta["copyright"]) if x)[:250]
     tags = [t for t in EXTRA_TAGS.split() if t.startswith("#")]
     tags = list(dict.fromkeys(c["hashtags"] + tags))[:20]
-    parts = [c["caption"].strip()]
+    parts = [p for p in (c["caption"].strip(), reference) if p]
     if attribution:
         parts.append(attribution)
     parts.append(" ".join(tags))
@@ -617,8 +616,10 @@ def main(argv: list[str]) -> int:
     for bid in YV_BIBLE_IDS:
         try:
             metas[bid] = yv_bible_meta(bid)
-        except NotAvailable:
-            log(f"Bible {bid} is not available to this App Key (run `python run.py --list-bibles`)")
+        except NotAvailable as e:
+            log(f"Bible {bid} is not available to this App Key. API said: {e}\n"
+                f"  -> run `python run.py --list-bibles` to see ids, and check the Bible is added to your app "
+                f"in the YouVersion Platform portal (Content Library).")
     if not metas:
         sys.exit("None of YV_BIBLE_IDS is accessible with this App Key.")
 
@@ -637,7 +638,7 @@ def main(argv: list[str]) -> int:
     name = f"{'dryrun-' if DRY_RUN else ''}{now:%Y%m%d-%H%M}-{slug}.jpg"
     path = IMG_DIR / name
     img.convert("RGB").save(path, "JPEG", quality=92, optimize=True)  # Instagram requires JPEG
-    caption = build_caption(content, meta)
+    caption = build_caption(content, meta, verse["reference"])
 
     if DRY_RUN:
         log(f"DRY RUN: wrote {path}\n--- verse ---\n{verse['text']}\n{ref_line}\n"
