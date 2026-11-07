@@ -74,9 +74,7 @@ jobs:
           IG_API_BASE: "https://graph.facebook.com"
           IG_API_VERSION: "v27.0"
           YV_BIBLE_IDS: "3034"
-          CAPTION_LANG: "English"
-
-
+          CAPTION_LANG: "English"a
       - name: Upload generated image
         if: always()
         uses: actions/upload-artifact@v4
