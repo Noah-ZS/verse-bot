@@ -12,7 +12,7 @@ Helper modes (need only YVP_APP_KEY):
 Secrets / env:
   YVP_APP_KEY, GEMINI_API_KEY, CF_ACCOUNT_ID, CF_API_TOKEN, IG_USER_ID, IG_TOKEN
 Optional env:
-  YV_BIBLE_IDS=344            comma-separated Bible ids, tried in order (verify with --list-bibles)
+  YV_BIBLE_IDS=3034            comma-separated Bible ids, tried in order (verify with --list-bibles)
   CAPTION_LANG="Kreol Morisien (Mauritian Creole)"   EXTRA_HASHTAGS="#kreolmorisien #ilemaurice ..."
   REPEAT_DAYS=90              a verse is eligible again this many days after it was posted
   MAX_VERSE_CHARS=420         longer verses are skipped (status=toolong)
@@ -55,7 +55,7 @@ MAX_VERSE_CHARS = int(os.environ.get("MAX_VERSE_CHARS", "420"))
 MAX_NEW_UNAVAILABLE = int(os.environ.get("MAX_NEW_UNAVAILABLE", "15"))
 
 YV_BASE = os.environ.get("YV_API_BASE", "https://api.youversion.com/v1").rstrip("/")
-YV_BIBLE_IDS = [x.strip() for x in os.environ.get("YV_BIBLE_IDS", "344").split(",") if x.strip()]
+YV_BIBLE_IDS = [x.strip() for x in os.environ.get("YV_BIBLE_IDS", "3034").split(",") if x.strip()]
 YV_LANG = os.environ.get("YV_LANG", "mfe")  # ISO 639-3 for Kreol Morisien
 
 CAPTION_LANG = os.environ.get("CAPTION_LANG", "Kreol Morisien (Mauritian Creole)")
