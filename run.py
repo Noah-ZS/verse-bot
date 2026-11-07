@@ -12,7 +12,7 @@ Helper modes (need only YVP_APP_KEY):
 Secrets / env:
   YVP_APP_KEY, GEMINI_API_KEY, CF_ACCOUNT_ID, CF_API_TOKEN, IG_USER_ID, IG_TOKEN
 Optional env:
-  YV_BIBLE_IDS=344            comma-separated Bible ids, tried in order (verify with --list-bibles)
+  YV_BIBLE_IDS=3034            comma-separated Bible ids, tried in order (verify with --list-bibles)
   CAPTION_LANG="Kreol Morisien (Mauritian Creole)"   EXTRA_HASHTAGS="#kreolmorisien #ilemaurice ..."
   REPEAT_DAYS=90              a verse is eligible again this many days after it was posted
   MAX_VERSE_CHARS=420         longer verses are skipped (status=toolong)

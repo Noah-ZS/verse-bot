@@ -68,6 +68,6 @@ jobs:
           MIN_GAP_MINUTES: "120"
           IG_HANDLE: ""
           # Bible ids to try in order (confirm with: python run.py --list-bibles)
-          YV_BIBLE_IDS: "344"
+          YV_BIBLE_IDS: "3034"
           CAPTION_LANG: "Kreol Morisien (Mauritian Creole)"
           REPEAT_DAYS: "90"
